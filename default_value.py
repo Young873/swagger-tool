@@ -22,7 +22,7 @@ default_type_value_dict = {
 
 # 公共请求头
 common_headers_dict = {
-    'token': 'xxxx'
+    # 'token': 'xxxx'
 }
 
 # 公共参数
