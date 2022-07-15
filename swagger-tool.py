@@ -5,10 +5,13 @@ import copy
 import json
 import logging
 import sys
+import traceback
 
 import requests
 
 from default_value import *
+
+requests.packages.urllib3.disable_warnings()
 
 global_config = {
     'target': '',
@@ -16,6 +19,7 @@ global_config = {
     'base_url': '',
     'skip_not_require_param': True,
     'proxies': None,
+    'no_request': False,
 
     'skip_url': [],
 
@@ -35,13 +39,14 @@ logger.setLevel(logging.INFO)
 
 def cmd_init():
     usage = "swagger-tool.py [options]\n\tpython3 swagger-tool.py -t http://xxxxx.com/v2/api-docs"
-    parser = argparse.ArgumentParser(prog='swagger', usage=usage)
+    parser = argparse.ArgumentParser(prog='swagger-tool', usage=usage)
 
     parser.add_argument("-t", dest="target", help="检测的目标地址 api-doc文件 api-doc地址", required=True)
     parser.add_argument("--base-url", dest="base_url", help="目标根路径,默认使用api-docs解析的地址")
     parser.add_argument("--skip-not-require-param", dest="skip_not_require_param", help="不发送非必要参数", default=False,
                         type=bool)
-    parser.add_argument("--proxy", dest="proxies", help="代理地址", )
+    parser.add_argument("--proxy", dest="proxies", help="代理地址 eg: http://127.0.0.1:8080", )
+    parser.add_argument("--no-request", dest="no_request", help="仅解析接口,不发送请求", action='store_true')
 
     args = parser.parse_args()
     if args.target:
@@ -52,6 +57,27 @@ def cmd_init():
         global_config['proxies'] = {"http": args.proxies, "https": args.proxies, }
     if args.skip_not_require_param:
         global_config['skip_not_require_param'] = args.skip_not_require_param
+    if args.no_request:
+        global_config['no_request'] = args.no_request
+
+
+def param2dict(method):
+    originalRef = item[method]['parameters'][0]['schema']['originalRef']
+    body_data = {}
+    for param_key in api_data['definitions'][originalRef]['properties']:
+        if param_key in default_value:
+            param_value = default_value[param_key]
+        elif api_data['definitions'][originalRef]['properties'][param_key][
+            'type'] in default_type_value:
+            param_type = api_data['definitions'][originalRef]['properties'][param_key]['type']
+            param_value = default_type_value[param_type]
+        elif 'default' in api_data['definitions'][originalRef]['properties'][param_key]:
+            param_value = api_data['definitions'][originalRef]['properties'][param_key][
+                'default']
+        else:
+            param_value = 'test'
+        body_data[param_key] = param_value
+    return body_data
 
 
 if __name__ == '__main__':
@@ -124,58 +150,122 @@ if __name__ == '__main__':
                             logger.warning('param path error {}'.format(param))
                     except:
                         logger.warning('param error2 {}'.format(param))
-            try:
-                if method == 'get':
-                    response = requests.get(url=url, params=query_data, proxies=proxies, verify=False,
-                                            headers=headers)
 
-                    success_counter += 1
-                elif method == 'post':
-                    if 'consumes' in item['post'] and 'application/json' in item['post']['consumes']:
-                        headers['Content-Type'] = 'application/json'
+            if global_config['no_request']:
+                logger.info(
+                    '{} {} {}'.format(base_url + path, method, item[method].get('summary', '')))
+                success_counter += 1
+            else:
+                try:
+                    if method == 'get':
+                        response = requests.get(url=url, params=query_data, proxies=proxies, verify=False,
+                                                headers=headers)
 
-                        if 'parameters' in item[method] and len(item[method]['parameters']) == 1 and 'schema' in \
-                                item[method]['parameters'][0]:
-                            originalRef = item[method]['parameters'][0]['schema']['originalRef']
-                            body_data = {}
-                            for param_key in api_data['definitions'][originalRef]['properties']:
-                                if param_key in default_value:
-                                    param_value = default_value[param_key]
-                                elif api_data['definitions'][originalRef]['properties'][param_key][
-                                    'type'] in default_type_value:
-                                    param_type = api_data['definitions'][originalRef]['properties'][param_key]['type']
-                                    param_value = default_type_value[param_type]
-                                elif 'default' in api_data['definitions'][originalRef]['properties'][param_key]:
-                                    param_value = api_data['definitions'][originalRef]['properties'][param_key][
-                                        'default']
-                                else:
-                                    param_value = 'test'
-                                body_data[param_key] = param_value
+                        success_counter += 1
+                    elif method == 'post':
+                        if 'consumes' in item['post'] and 'application/json' in item['post']['consumes']:
+                            headers['Content-Type'] = 'application/json'
+                            if 'parameters' in item[method] and len(item[method]['parameters']) == 1 and 'schema' in \
+                                    item[method]['parameters'][0]:
+                                body_data = param2dict(method)
 
-                        response = requests.post(url=base_url + path, params=query_data, data=json.dumps(body_data),
-                                                 proxies=proxies, verify=False, headers=headers)
+                            response = requests.post(url=base_url + path, params=query_data, data=json.dumps(body_data),
+                                                     proxies=proxies, verify=False, headers=headers)
+                        else:
+                            response = requests.post(url=base_url + path, params=query_data, data=body_data,
+                                                     proxies=proxies,
+                                                     verify=False, headers=headers)
+
+                        success_counter += 1
+                    elif method == 'head':
+                        if 'consumes' in item['post'] and 'application/json' in item['post']['consumes']:
+                            headers['Content-Type'] = 'application/json'
+                            if 'parameters' in item[method] and len(item[method]['parameters']) == 1 and 'schema' in \
+                                    item[method]['parameters'][0]:
+                                body_data = param2dict(method)
+
+                            response = requests.head(url=base_url + path, params=query_data, data=json.dumps(body_data),
+                                                     proxies=proxies, verify=False, headers=headers)
+                        else:
+                            response = requests.head(url=base_url + path, params=query_data, data=body_data,
+                                                     proxies=proxies,
+                                                     verify=False, headers=headers)
+                        success_counter += 1
+                    elif method == 'put':
+                        if 'consumes' in item['post'] and 'application/json' in item['post']['consumes']:
+                            headers['Content-Type'] = 'application/json'
+                            if 'parameters' in item[method] and len(item[method]['parameters']) == 1 and 'schema' in \
+                                    item[method]['parameters'][0]:
+                                body_data = param2dict(method)
+
+                            response = requests.put(url=base_url + path, params=query_data, data=json.dumps(body_data),
+                                                    proxies=proxies, verify=False, headers=headers)
+                        else:
+                            response = requests.put(url=base_url + path, params=query_data, data=body_data,
+                                                    proxies=proxies,
+                                                    verify=False, headers=headers)
+                        success_counter += 1
+                    elif method == 'delete':
+                        if 'consumes' in item['post'] and 'application/json' in item['post']['consumes']:
+                            headers['Content-Type'] = 'application/json'
+                            if 'parameters' in item[method] and len(item[method]['parameters']) == 1 and 'schema' in \
+                                    item[method]['parameters'][0]:
+                                body_data = param2dict(method)
+
+                            response = requests.delete(url=base_url + path, params=query_data,
+                                                       data=json.dumps(body_data),
+                                                       proxies=proxies, verify=False, headers=headers)
+                        else:
+                            response = requests.delete(url=base_url + path, params=query_data, data=body_data,
+                                                       proxies=proxies,
+                                                       verify=False, headers=headers)
+                        success_counter += 1
+                    elif method == 'options':
+                        if 'consumes' in item['post'] and 'application/json' in item['post']['consumes']:
+                            headers['Content-Type'] = 'application/json'
+                            if 'parameters' in item[method] and len(item[method]['parameters']) == 1 and 'schema' in \
+                                    item[method]['parameters'][0]:
+                                body_data = param2dict(method)
+
+                            response = requests.options(url=base_url + path, params=query_data,
+                                                        data=json.dumps(body_data),
+                                                        proxies=proxies, verify=False, headers=headers)
+                        else:
+                            response = requests.options(url=base_url + path, params=query_data, data=body_data,
+                                                        proxies=proxies,
+                                                        verify=False, headers=headers)
+                        success_counter += 1
+                    elif method == 'patch':
+                        if 'consumes' in item['post'] and 'application/json' in item['post']['consumes']:
+                            headers['Content-Type'] = 'application/json'
+                            if 'parameters' in item[method] and len(item[method]['parameters']) == 1 and 'schema' in \
+                                    item[method]['parameters'][0]:
+                                body_data = param2dict(method)
+
+                            response = requests.patch(url=base_url + path, params=query_data,
+                                                      data=json.dumps(body_data),
+                                                      proxies=proxies, verify=False, headers=headers)
+                        else:
+                            response = requests.patch(url=base_url + path, params=query_data, data=body_data,
+                                                      proxies=proxies,
+                                                      verify=False, headers=headers)
+                        success_counter += 1
                     else:
                         response = requests.post(url=base_url + path, params=query_data, data=body_data,
                                                  proxies=proxies,
                                                  verify=False, headers=headers)
+                        warring_counter += 1
+                        logger.warning('{} unimplement,using post method'.format(method))
 
-                    success_counter += 1
-                else:
-                    response = requests.post(url=base_url + path, params=query_data, data=body_data,
-                                             proxies=proxies,
-                                             verify=False, headers=headers)
-                    warring_counter += 1
-                    logger.warning('{} unimplement,using post method'.format(method))
+                    logger.info(
+                        '{} {} {} send success ,response {}'.format(base_url + path, method,
+                                                                    item[method].get('summary', ''),
+                                                                    response.status_code))
 
-                logger.info(
-                    '{} {} {} send success ,response {}'.format(base_url + path, method,
-                                                                item[method].get('summary', ''),
-                                                                response.status_code))
-
-            except:
-                # print(traceback.format_exc())
-                error_counter += 1
-                logger.error('{} {} request error'.format(base_url + path, method))
+                except:
+                    # print(traceback.format_exc())
+                    error_counter += 1
+                    logger.error('{} {} request error'.format(base_url + path, method))
 
     print('\nTask Completed. success: {}, warring: {}, error: {}, total: {}.'.format(success_counter, warring_counter,
                                                                                      error_counter,
